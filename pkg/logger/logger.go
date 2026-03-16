@@ -87,7 +87,7 @@ func formatFieldValue(i any) string {
 		return fmt.Sprintf("\n%s", s)
 	}
 
-	// 如果字符串包含空格，但不是 JSON 对象或数组，则将其用引号括起来，以确保在日志输出中正确显示
+	// 如果字符串包含空格，但不是 JSON 对象或数组，则将其用引号括起来
 	if strings.Contains(s, " ") {
 		if (strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) ||
 			(strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) {
@@ -214,8 +214,7 @@ func getEvent(logger zerolog.Logger, level LogLevel) *zerolog.Event {
 	}
 }
 
-// appendFields 将字段添加到日志事件中
-// 使用 type switch 根据字段值的类型调用相应的方法添加字段
+// appendFields 根据字段值的类型调用相应的方法将字段添加到日志事件中
 func appendFields(event *zerolog.Event, fields map[string]any) {
 	for k, v := range fields {
 		// 对于字符串类型，直接使用 Str() 方法添加字段，避免将字符串再次序列化为 JSON 格式
