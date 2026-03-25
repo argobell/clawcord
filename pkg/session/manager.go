@@ -11,26 +11,30 @@ import (
 	"github.com/argobell/clawcord/pkg/providers"
 )
 
+// Session 结构体表示一个会话，包含会话的关键信息，例如消息列表、摘要、创建时间和更新时间。
 type Session struct {
-	Key      string              `json:"key"`
-	Messages []providers.Message `json:"messages"`
-	Summary  string              `json:"summary,omitempty"`
-	Created  time.Time           `json:"created"`
-	Updated  time.Time           `json:"updated"`
+	Key      string              `json:"key"`               // 会话的唯一标识符
+	Messages []providers.Message `json:"messages"`          // 会话中的消息列表
+	Summary  string              `json:"summary,omitempty"` // 会话的摘要，可选字段
+	Created  time.Time           `json:"created"`           // 会话的创建时间
+	Updated  time.Time           `json:"updated"`           // 会话的最后更新时间
 }
 
+// SessionManager 结构体管理多个会话，提供线程安全的操作和持久化存储。
 type SessionManager struct {
-	sessions map[string]*Session
-	mu       sync.RWMutex
-	storage  string
+	sessions map[string]*Session // 内存中的会话存储，键为会话的唯一标识符
+	mu       sync.RWMutex        // 读写锁，确保线程安全
+	storage  string              // 会话数据的存储路径
 }
 
+// NewSessionManager 创建一个新的会话管理器，并加载存储中的会话数据。
 func NewSessionManager(storage string) *SessionManager {
 	sm := &SessionManager{
 		sessions: make(map[string]*Session),
 		storage:  storage,
 	}
 
+	// 如果指定了存储路径，则创建目录并加载会话数据
 	if storage != "" {
 		os.MkdirAll(storage, 0o700)
 		sm.loadSessions()
@@ -39,6 +43,7 @@ func NewSessionManager(storage string) *SessionManager {
 	return sm
 }
 
+// GetOrCreate 获取指定键的会话，如果不存在则创建一个新的会话。
 func (sm *SessionManager) GetOrCreate(key string) *Session {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -48,6 +53,7 @@ func (sm *SessionManager) GetOrCreate(key string) *Session {
 		return session
 	}
 
+	// 创建新会话
 	session = &Session{
 		Key:      key,
 		Messages: []providers.Message{},
@@ -59,6 +65,7 @@ func (sm *SessionManager) GetOrCreate(key string) *Session {
 	return session
 }
 
+// AddMessage 向指定会话添加一条消息。
 func (sm *SessionManager) AddMessage(sessionKey, role, content string) {
 	sm.AddFullMessage(sessionKey, providers.Message{
 		Role:    role,
@@ -66,12 +73,14 @@ func (sm *SessionManager) AddMessage(sessionKey, role, content string) {
 	})
 }
 
+// AddFullMessage 向指定会话添加完整的消息对象。
 func (sm *SessionManager) AddFullMessage(sessionKey string, msg providers.Message) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	session, ok := sm.sessions[sessionKey]
 	if !ok {
+		// 如果会话不存在，则创建新会话
 		session = &Session{
 			Key:      sessionKey,
 			Messages: []providers.Message{},
@@ -80,10 +89,12 @@ func (sm *SessionManager) AddFullMessage(sessionKey string, msg providers.Messag
 		sm.sessions[sessionKey] = session
 	}
 
+	// 添加消息并更新会话的更新时间
 	session.Messages = append(session.Messages, msg)
 	session.Updated = time.Now()
 }
 
+// GetHistory 获取指定会话的消息历史。
 func (sm *SessionManager) GetHistory(key string) []providers.Message {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -93,11 +104,13 @@ func (sm *SessionManager) GetHistory(key string) []providers.Message {
 		return []providers.Message{}
 	}
 
+	// 返回消息的副本以避免外部修改
 	history := make([]providers.Message, len(session.Messages))
 	copy(history, session.Messages)
 	return history
 }
 
+// GetSummary 获取指定会话的摘要。
 func (sm *SessionManager) GetSummary(key string) string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -109,6 +122,7 @@ func (sm *SessionManager) GetSummary(key string) string {
 	return session.Summary
 }
 
+// SetSummary 设置指定会话的摘要。
 func (sm *SessionManager) SetSummary(key string, summary string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -120,6 +134,7 @@ func (sm *SessionManager) SetSummary(key string, summary string) {
 	}
 }
 
+// TruncateHistory 截断指定会话的消息历史，仅保留最近的若干条消息。
 func (sm *SessionManager) TruncateHistory(key string, keepLast int) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -130,6 +145,7 @@ func (sm *SessionManager) TruncateHistory(key string, keepLast int) {
 	}
 
 	if keepLast <= 0 {
+		// 如果保留条数小于等于 0，则清空消息历史
 		session.Messages = []providers.Message{}
 		session.Updated = time.Now()
 		return
@@ -139,10 +155,12 @@ func (sm *SessionManager) TruncateHistory(key string, keepLast int) {
 		return
 	}
 
+	// 截断消息历史
 	session.Messages = session.Messages[len(session.Messages)-keepLast:]
 	session.Updated = time.Now()
 }
 
+// sanitizeFilename 清理文件名，将非法字符替换为下划线。
 func sanitizeFilename(key string) string {
 	s := strings.ReplaceAll(key, ":", "_")
 	s = strings.ReplaceAll(s, "/", "_")
@@ -150,11 +168,13 @@ func sanitizeFilename(key string) string {
 	return s
 }
 
+// Save 将指定会话保存到存储中。
 func (sm *SessionManager) Save(key string) error {
 	if sm.storage == "" {
 		return nil
 	}
 
+	// 清理文件名
 	filename := sanitizeFilename(key)
 
 	if filename == "." || !filepath.IsLocal(filename) {
@@ -167,6 +187,7 @@ func (sm *SessionManager) Save(key string) error {
 		return nil
 	}
 
+	// 创建会话的快照
 	snapshot := Session{
 		Key:     stored.Key,
 		Summary: stored.Summary,
@@ -181,6 +202,7 @@ func (sm *SessionManager) Save(key string) error {
 	}
 	sm.mu.RUnlock()
 
+	// 序列化会话数据
 	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
@@ -200,6 +222,7 @@ func (sm *SessionManager) Save(key string) error {
 		}
 	}()
 
+	// 写入数据到临时文件
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		return err
@@ -216,6 +239,7 @@ func (sm *SessionManager) Save(key string) error {
 		return err
 	}
 
+	// 将临时文件重命名为目标文件
 	if err := os.Rename(tmpPath, sessionPath); err != nil {
 		return err
 	}
@@ -223,6 +247,7 @@ func (sm *SessionManager) Save(key string) error {
 	return nil
 }
 
+// loadSessions 从存储中加载所有会话数据。
 func (sm *SessionManager) loadSessions() error {
 	files, err := os.ReadDir(sm.storage)
 	if err != nil {
@@ -255,10 +280,12 @@ func (sm *SessionManager) loadSessions() error {
 	return nil
 }
 
+// Close 关闭会话管理器，目前未实现任何操作。
 func (sm *SessionManager) Close() error {
 	return nil
 }
 
+// SetHistory 设置指定会话的消息历史。
 func (sm *SessionManager) SetHistory(key string, history []providers.Message) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
