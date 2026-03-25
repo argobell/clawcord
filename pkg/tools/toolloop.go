@@ -76,7 +76,7 @@ func RunToolLoop(
 		// 兼容 provider 返回的不同 tool_call 形态，统一成运行时可执行结构。
 		normalizedToolCalls := make([]providers.ToolCall, 0, len(response.ToolCalls))
 		for _, tc := range response.ToolCalls {
-			normalizedToolCalls = append(normalizedToolCalls, normalizeToolCall(tc))
+			normalizedToolCalls = append(normalizedToolCalls, NormalizeToolCall(tc))
 		}
 
 		toolNames := make([]string, 0, len(normalizedToolCalls))
@@ -145,16 +145,22 @@ func RunToolLoop(
 
 		// tool 消息必须按原调用顺序追加，否则会破坏模型上下文的一致性。
 		for _, r := range results {
-			contentForLLM := r.result.ForLLM
-			if contentForLLM == "" && r.result.Err != nil {
-				contentForLLM = r.result.Err.Error()
+			result := r.result
+			if result == nil {
+				result = ErrorResult("tool returned nil result").WithError(fmt.Errorf("nil tool result"))
 			}
 
-			messages = append(messages, providers.Message{
+			contentForLLM := result.ForLLM
+			if contentForLLM == "" && result.Err != nil {
+				contentForLLM = result.Err.Error()
+			}
+
+			toolMsg := providers.Message{
 				Role:       "tool",
 				Content:    contentForLLM,
 				ToolCallID: r.tc.ID,
-			})
+			}
+			messages = append(messages, toolMsg)
 		}
 	}
 

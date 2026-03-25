@@ -191,3 +191,23 @@ func TestRunToolLoopReturnsProviderError(t *testing.T) {
 		t.Fatal("expected provider error")
 	}
 }
+
+func TestRunToolLoopReturnsTranscriptForDirectAnswer(t *testing.T) {
+	provider := &fakeProvider{
+		responses: []*providers.LLMResponse{
+			{Content: "hello from model"},
+		},
+	}
+
+	result, err := RunToolLoop(context.Background(), ToolLoopConfig{
+		Provider:      provider,
+		Model:         "test-model",
+		MaxIterations: 2,
+	}, []providers.Message{{Role: "user", Content: "hi"}}, "discord", "chat-1")
+	if err != nil {
+		t.Fatalf("RunToolLoop returned error: %v", err)
+	}
+	if result.Content != "hello from model" {
+		t.Fatalf("expected direct answer, got %q", result.Content)
+	}
+}

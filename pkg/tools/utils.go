@@ -6,10 +6,10 @@ import (
 	"github.com/argobell/clawcord/pkg/providers"
 )
 
-// normalizeToolCall 将 provider 返回的 tool_call 统一成运行时使用的结构。
+// NormalizeToolCall 将 provider 返回的 tool_call 统一成运行时使用的结构。
 // 有些 provider 只填充 Function.Name / Function.Arguments，因此这里需要补齐
 // Name 和 Arguments，避免后续注册表查找与工具执行失败。
-func normalizeToolCall(tc providers.ToolCall) providers.ToolCall {
+func NormalizeToolCall(tc providers.ToolCall) providers.ToolCall {
 	name := tc.Name
 	args := tc.Arguments
 	if tc.Function != nil {
