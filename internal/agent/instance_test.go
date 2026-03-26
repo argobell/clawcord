@@ -12,6 +12,10 @@ import (
 	"github.com/argobell/clawcord/pkg/tools"
 )
 
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+
 type fakeProvider struct {
 	defaultModel string
 }
@@ -32,6 +36,7 @@ func (f *fakeProvider) GetDefaultModel() string {
 
 type fakeSessionStore struct {
 	closeCalls int
+	saveCalls  int
 }
 
 func (f *fakeSessionStore) AddMessage(_, _, _ string)                    {}
@@ -42,7 +47,10 @@ func (f *fakeSessionStore) SetSummary(_, _ string)                       {}
 func (f *fakeSessionStore) SetHistory(_ string, _ []providers.Message) {
 }
 func (f *fakeSessionStore) TruncateHistory(_ string, _ int) {}
-func (f *fakeSessionStore) Save(_ string) error             { return nil }
+func (f *fakeSessionStore) Save(_ string) error {
+	f.saveCalls++
+	return nil
+}
 func (f *fakeSessionStore) Close() error {
 	f.closeCalls++
 	return nil
@@ -65,7 +73,7 @@ func TestNewInstanceUsesExplicitConfig(t *testing.T) {
 		Tools:         registry,
 		MaxIterations: 7,
 		MaxTokens:     2048,
-		Temperature:   0.2,
+		Temperature:   float64Ptr(0.2),
 	})
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
@@ -154,6 +162,20 @@ func TestNewInstanceAppliesDefaults(t *testing.T) {
 	}
 	if instance.Tools.Count() != 0 {
 		t.Fatalf("expected empty default tool registry, got %d tools", instance.Tools.Count())
+	}
+}
+
+func TestNewInstancePreservesExplicitZeroTemperature(t *testing.T) {
+	instance, err := New(Config{
+		Provider:    &fakeProvider{defaultModel: "gpt-5.4"},
+		Temperature: float64Ptr(0),
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	if instance.Temperature != 0 {
+		t.Fatalf("expected explicit Temperature=0 to be preserved, got %v", instance.Temperature)
 	}
 }
 

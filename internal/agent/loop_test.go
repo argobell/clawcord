@@ -345,3 +345,31 @@ func TestRunTurnPersistsToolTranscriptWhenFollowUpLLMCallFails(t *testing.T) {
 		t.Fatalf("expected tool result third, got %#v", history[2])
 	}
 }
+
+func TestRunTurnSavesUserMessageWhenFirstLLMCallFails(t *testing.T) {
+	store := &fakeSessionStore{}
+	provider := &recordingProvider{
+		defaultModel: "gpt-5.4",
+		err:          context.DeadlineExceeded,
+		errAtCall:    1,
+	}
+
+	instance, err := New(Config{
+		Provider:     provider,
+		SessionStore: store,
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	_, err = instance.RunTurn(context.Background(), TurnInput{
+		SessionKey:  "discord:6",
+		UserMessage: "hello",
+	})
+	if err == nil {
+		t.Fatal("expected RunTurn to return error")
+	}
+	if store.saveCalls != 1 {
+		t.Fatalf("expected Save to be called once, got %d", store.saveCalls)
+	}
+}

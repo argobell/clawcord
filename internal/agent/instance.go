@@ -23,7 +23,7 @@ type Config struct {
 	Tools         *tools.ToolRegistry
 	MaxIterations int
 	MaxTokens     int
-	Temperature   float64
+	Temperature   *float64
 }
 
 // AgentInstance 持有未来 loop 运行所需的核心依赖和默认值。
@@ -78,8 +78,10 @@ func New(cfg Config) (*AgentInstance, error) {
 		maxTokens = 8192
 	}
 
-	temperature := cfg.Temperature
-	if temperature == 0 {
+	temperature := 0.7
+	if cfg.Temperature != nil {
+		temperature = *cfg.Temperature
+	} else {
 		temperature = 0.7
 	}
 

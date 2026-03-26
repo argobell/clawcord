@@ -66,10 +66,8 @@ func (a *AgentInstance) RunTurn(ctx context.Context, input TurnInput) (*TurnResu
 		a.Sessions.AddFullMessage(input.SessionKey, msg)
 	}
 	if err != nil {
-		if len(transcript) > 0 {
-			if saveErr := a.Sessions.Save(input.SessionKey); saveErr != nil {
-				return nil, saveErr
-			}
+		if saveErr := a.Sessions.Save(input.SessionKey); saveErr != nil {
+			return nil, saveErr
 		}
 		return nil, err
 	}
