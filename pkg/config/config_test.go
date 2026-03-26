@@ -22,6 +22,20 @@ func TestFlexibleStringSliceUnmarshalJSONAcceptsNumbers(t *testing.T) {
 	}
 }
 
+func TestFlexibleStringSliceUnmarshalJSONPreservesLargeIntegerIDs(t *testing.T) {
+	var got FlexibleStringSlice
+	if err := json.Unmarshal([]byte(`[1305792487201757204]`), &got); err != nil {
+		t.Fatalf("json.Unmarshal returned error: %v", err)
+	}
+
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if got[0] != "1305792487201757204" {
+		t.Fatalf("got[0] = %q, want %q", got[0], "1305792487201757204")
+	}
+}
+
 func TestFlexibleStringSliceUnmarshalTextAcceptsChineseComma(t *testing.T) {
 	var got FlexibleStringSlice
 	if err := got.UnmarshalText([]byte("123，456, 789")); err != nil {

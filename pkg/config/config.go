@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -16,8 +17,11 @@ func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+
 	var raw []any
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := dec.Decode(&raw); err != nil {
 		return err
 	}
 
@@ -26,8 +30,8 @@ func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
 		switch val := v.(type) {
 		case string:
 			result = append(result, val)
-		case float64:
-			result = append(result, fmt.Sprintf("%.0f", val))
+		case json.Number:
+			result = append(result, val.String())
 		default:
 			result = append(result, fmt.Sprintf("%v", val))
 		}
