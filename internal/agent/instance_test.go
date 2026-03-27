@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/argobell/clawcord/pkg/config"
 	"github.com/argobell/clawcord/pkg/providers"
 	"github.com/argobell/clawcord/pkg/session"
 	"github.com/argobell/clawcord/pkg/tools"
@@ -14,6 +15,41 @@ import (
 
 func float64Ptr(v float64) *float64 {
 	return &v
+}
+
+func newTestAgentInstance(
+	t *testing.T,
+	defaults config.AgentDefaults,
+	agentCfg config.AgentConfig,
+	provider providers.LLMProvider,
+	sessions session.SessionStore,
+	registry *tools.ToolRegistry,
+) *AgentInstance {
+	t.Helper()
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{Defaults: defaults},
+		ModelList: []config.ModelConfig{
+			{
+				ModelName: "main",
+				Model:     "gpt-5.4-mini",
+			},
+			{
+				ModelName: "gpt-5.4",
+				Model:     "gpt-5.4",
+			},
+			{
+				ModelName: "openai-main",
+				Model:     "openai/gpt-5.4",
+			},
+		},
+	}
+
+	instance, err := NewAgentInstance(agentCfg, defaults, cfg, provider, sessions, registry)
+	if err != nil {
+		t.Fatalf("NewAgentInstance returned error: %v", err)
+	}
+	return instance
 }
 
 type fakeProvider struct {
@@ -61,22 +97,45 @@ func TestNewInstanceUsesExplicitConfig(t *testing.T) {
 	provider := &fakeProvider{defaultModel: "ignored-default"}
 	sessions := &fakeSessionStore{}
 	registry := tools.NewToolRegistry()
+	temp := 0.2
 
-	instance, err := New(Config{
-		Provider:      provider,
-		ID:            "discord-main",
-		Name:          "Discord Main Agent",
-		Model:         "gpt-5.4",
-		Workspace:     workspace,
-		SystemPrompt:  "system prompt",
-		SessionStore:  sessions,
-		Tools:         registry,
-		MaxIterations: 7,
-		MaxTokens:     2048,
-		Temperature:   float64Ptr(0.2),
-	})
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         workspace,
+				ModelName:         "main",
+				MaxTokens:         4096,
+				Temperature:       &temp,
+				MaxToolIterations: 20,
+			},
+		},
+		ModelList: []config.ModelConfig{
+			{
+				ModelName: "main",
+				Model:     "gpt-5.4-mini",
+			},
+			{
+				ModelName: "discord-main",
+				Model:     "gpt-5.4",
+			},
+		},
+	}
+
+	instance, err := NewAgentInstance(
+		config.AgentConfig{
+			ID:        "discord-main",
+			Name:      "Discord Main Agent",
+			Workspace: workspace,
+			Model:     "discord-main",
+		},
+		cfg.Agents.Defaults,
+		cfg,
+		provider,
+		sessions,
+		registry,
+	)
 	if err != nil {
-		t.Fatalf("New returned error: %v", err)
+		t.Fatalf("NewAgentInstance returned error: %v", err)
 	}
 
 	if instance.Provider != provider {
@@ -100,11 +159,11 @@ func TestNewInstanceUsesExplicitConfig(t *testing.T) {
 	if instance.Workspace != workspace {
 		t.Fatalf("expected explicit workspace, got %q", instance.Workspace)
 	}
-	if instance.MaxIterations != 7 {
-		t.Fatalf("expected MaxIterations=7, got %d", instance.MaxIterations)
+	if instance.MaxIterations != 20 {
+		t.Fatalf("expected MaxIterations=20, got %d", instance.MaxIterations)
 	}
-	if instance.MaxTokens != 2048 {
-		t.Fatalf("expected MaxTokens=2048, got %d", instance.MaxTokens)
+	if instance.MaxTokens != 4096 {
+		t.Fatalf("expected MaxTokens=4096, got %d", instance.MaxTokens)
 	}
 	if instance.Temperature != 0.2 {
 		t.Fatalf("expected Temperature=0.2, got %v", instance.Temperature)
@@ -113,18 +172,15 @@ func TestNewInstanceUsesExplicitConfig(t *testing.T) {
 		t.Fatal("expected ContextBuilder to be initialized")
 	}
 	prompt := instance.ContextBuilder.BuildSystemPrompt()
-	if !strings.Contains(prompt, "system prompt") {
-		t.Fatalf("expected context builder to include system prompt, got %q", prompt)
+	if strings.Contains(prompt, "default prompt") {
+		t.Fatalf("expected config not to inject system prompt, got %q", prompt)
 	}
 }
 
 func TestNewInstanceAppliesDefaults(t *testing.T) {
 	provider := &fakeProvider{defaultModel: "gpt-5.4-mini"}
 
-	instance, err := New(Config{Provider: provider})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(t, config.AgentDefaults{}, config.AgentConfig{}, provider, nil, nil)
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -166,13 +222,17 @@ func TestNewInstanceAppliesDefaults(t *testing.T) {
 }
 
 func TestNewInstancePreservesExplicitZeroTemperature(t *testing.T) {
-	instance, err := New(Config{
-		Provider:    &fakeProvider{defaultModel: "gpt-5.4"},
-		Temperature: float64Ptr(0),
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{
+			ModelName:   "gpt-5.4",
+			Temperature: float64Ptr(0),
+		},
+		config.AgentConfig{},
+		&fakeProvider{defaultModel: "gpt-5.4"},
+		nil,
+		nil,
+	)
 
 	if instance.Temperature != 0 {
 		t.Fatalf("expected explicit Temperature=0 to be preserved, got %v", instance.Temperature)
@@ -180,14 +240,28 @@ func TestNewInstancePreservesExplicitZeroTemperature(t *testing.T) {
 }
 
 func TestNewInstanceFailsWithoutProvider(t *testing.T) {
-	_, err := New(Config{Model: "gpt-5.4"})
+	_, err := NewAgentInstance(
+		config.AgentConfig{},
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		&config.Config{},
+		nil,
+		nil,
+		nil,
+	)
 	if err == nil {
 		t.Fatal("expected error for missing provider")
 	}
 }
 
 func TestNewInstanceFailsWithoutAnyModel(t *testing.T) {
-	_, err := New(Config{Provider: &fakeProvider{}})
+	_, err := NewAgentInstance(
+		config.AgentConfig{},
+		config.AgentDefaults{},
+		&config.Config{},
+		&fakeProvider{},
+		nil,
+		nil,
+	)
 	if err == nil {
 		t.Fatal("expected error when both explicit and provider default models are empty")
 	}
@@ -197,13 +271,14 @@ func TestNewInstanceExpandsHomeInWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	instance, err := New(Config{
-		Provider:  &fakeProvider{defaultModel: "gpt-5.4"},
-		Workspace: "~/clawcord-workspace",
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{},
+		config.AgentConfig{Workspace: "~/clawcord-workspace", Model: "gpt-5.4"},
+		&fakeProvider{defaultModel: "gpt-5.4"},
+		nil,
+		nil,
+	)
 
 	expected := filepath.Join(home, "clawcord-workspace")
 	if instance.Workspace != expected {
@@ -217,18 +292,98 @@ func TestNewInstanceExpandsHomeInWorkspace(t *testing.T) {
 
 func TestInstanceCloseDelegatesToSessionStore(t *testing.T) {
 	sessions := &fakeSessionStore{}
-	instance, err := New(Config{
-		Provider:     &fakeProvider{defaultModel: "gpt-5.4"},
-		SessionStore: sessions,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		&fakeProvider{defaultModel: "gpt-5.4"},
+		sessions,
+		nil,
+	)
 
 	if err := instance.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
 	if sessions.closeCalls != 1 {
 		t.Fatalf("expected Close to delegate once, got %d", sessions.closeCalls)
+	}
+}
+
+func TestNewAgentInstanceResolvesModelAliasFromModelList(t *testing.T) {
+	workspace := t.TempDir()
+	provider := &fakeProvider{defaultModel: "ignored-default"}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "main",
+			},
+		},
+		ModelList: []config.ModelConfig{
+			{
+				ModelName: "main",
+				Model:     "openai/gpt-5.4",
+			},
+		},
+	}
+
+	instance, err := NewAgentInstance(
+		config.AgentConfig{
+			ID:   "main",
+			Name: "Main Agent",
+		},
+		cfg.Agents.Defaults,
+		cfg,
+		provider,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewAgentInstance returned error: %v", err)
+	}
+
+	if instance.Model != "openai/gpt-5.4" {
+		t.Fatalf("Model = %q, want %q", instance.Model, "openai/gpt-5.4")
+	}
+}
+
+func TestNewAgentInstanceUsesNamedWorkspaceSuffixForNonMainAgent(t *testing.T) {
+	baseWorkspace := filepath.Join(t.TempDir(), "workspace")
+	provider := &fakeProvider{defaultModel: "ignored-default"}
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: baseWorkspace,
+				ModelName: "main",
+			},
+		},
+		ModelList: []config.ModelConfig{
+			{
+				ModelName: "main",
+				Model:     "openai/gpt-5.4",
+			},
+		},
+	}
+
+	instance, err := NewAgentInstance(
+		config.AgentConfig{
+			ID:   "discord-helper",
+			Name: "Discord Helper",
+		},
+		cfg.Agents.Defaults,
+		cfg,
+		provider,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewAgentInstance returned error: %v", err)
+	}
+
+	expected := filepath.Join(filepath.Dir(baseWorkspace), "workspace-discord-helper")
+	if instance.Workspace != expected {
+		t.Fatalf("Workspace = %q, want %q", instance.Workspace, expected)
 	}
 }
