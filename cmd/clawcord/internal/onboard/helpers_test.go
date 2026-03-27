@@ -54,6 +54,14 @@ func TestOnboardCreatesConfigAndWorkspace(t *testing.T) {
 	if !ok || len(modelList) != 1 {
 		t.Fatalf("model_list = %#v, want one entry", raw["model_list"])
 	}
+
+	session, ok := raw["session"].(map[string]any)
+	if !ok {
+		t.Fatal("config missing session")
+	}
+	if got := session["dm_scope"]; got != "per-channel-peer" {
+		t.Fatalf("session.dm_scope = %v, want %q", got, "per-channel-peer")
+	}
 }
 
 func TestOnboardDoesNotOverwriteExistingConfig(t *testing.T) {

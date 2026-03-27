@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/argobell/clawcord/cmd/clawcord/internal/agent"
 	"github.com/argobell/clawcord/cmd/clawcord/internal/onboard"
 	"github.com/spf13/cobra"
 )
@@ -18,6 +19,7 @@ func NewClawcordCommand() *cobra.Command {
 
 	cmd.AddCommand(
 		onboard.NewOnboardCommand(),
+		agent.NewAgentCommand(),
 	)
 
 	return cmd

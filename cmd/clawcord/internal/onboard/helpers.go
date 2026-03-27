@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	projectconfig "github.com/argobell/clawcord/pkg/config"
+	"github.com/argobell/clawcord/pkg/config"
 )
 
 func onboard() error {
@@ -47,57 +47,11 @@ func runOnboard(configPath, workspacePath string) error {
 		return err
 	}
 
-	cfg := defaultConfig(workspacePath)
+	cfg := config.DefaultConfigForHome(filepath.Dir(configPath))
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
 
 	return os.WriteFile(configPath, data, 0o600)
-}
-
-func defaultConfig(workspacePath string) projectconfig.Config {
-	temperature := 0.0
-	return projectconfig.Config{
-		Agents: projectconfig.AgentsConfig{
-			Defaults: projectconfig.AgentDefaults{
-				Workspace:         workspacePath,
-				ModelName:         "main",
-				MaxTokens:         8192,
-				Temperature:       &temperature,
-				MaxToolIterations: 20,
-			},
-			List: []projectconfig.AgentConfig{
-				{
-					ID:   "main",
-					Name: "Main Agent",
-				},
-			},
-		},
-		ModelList: []projectconfig.ModelConfig{
-			{
-				ModelName: "main",
-				Model:     "openai/gpt-5.4",
-				APIBase:   "https://api.openai.com/v1",
-				APIKey:    "YOUR_API_KEY",
-			},
-		},
-		Channels: projectconfig.ChannelsConfig{
-			Discord: projectconfig.DiscordConfig{
-				Enabled:        false,
-				Token:          "YOUR_DISCORD_BOT_TOKEN",
-				MessageContent: true,
-				Typing: projectconfig.TypingConfig{
-					Enabled: true,
-				},
-				Placeholder: projectconfig.PlaceholderConfig{
-					Enabled: true,
-					Text:    "Thinking... 💭",
-				},
-			},
-		},
-		Session: projectconfig.SessionConfig{
-			DMScope: "per-peer",
-		},
-	}
 }
