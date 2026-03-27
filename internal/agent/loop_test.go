@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/argobell/clawcord/pkg/config"
 	"github.com/argobell/clawcord/pkg/providers"
 	"github.com/argobell/clawcord/pkg/session"
 	"github.com/argobell/clawcord/pkg/tools"
@@ -80,14 +81,15 @@ func TestRunTurnReturnsDirectAnswerAndPersistsMessages(t *testing.T) {
 		},
 	}
 
-	instance, err := New(Config{
-		Provider:     provider,
-		SessionStore: store,
-		SystemPrompt: "system prompt",
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		provider,
+		store,
+		nil,
+	)
+	instance.ContextBuilder = NewContextBuilder(instance.Workspace, "system prompt")
 
 	result, err := instance.RunTurn(context.Background(), TurnInput{
 		SessionKey:      "discord:1",
@@ -158,14 +160,14 @@ func TestRunTurnPersistsToolTranscriptInOrder(t *testing.T) {
 	}
 	registry.Register(tool)
 
-	instance, err := New(Config{
-		Provider:     provider,
-		SessionStore: store,
-		Tools:        registry,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		provider,
+		store,
+		registry,
+	)
 
 	result, err := instance.RunTurn(context.Background(), TurnInput{
 		SessionKey:      "discord:2",
@@ -222,15 +224,16 @@ func TestRunTurnNoHistorySkipsExistingHistoryInProviderMessages(t *testing.T) {
 		},
 	}
 
-	instance, err := New(Config{
-		Provider:     provider,
-		SessionStore: store,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		provider,
+		store,
+		nil,
+	)
 
-	_, err = instance.RunTurn(context.Background(), TurnInput{
+	_, err := instance.RunTurn(context.Background(), TurnInput{
 		SessionKey:  "discord:3",
 		Channel:     "discord",
 		ChatID:      "chat-3",
@@ -261,13 +264,14 @@ func TestRunTurnUsesDefaultResponseWhenProviderReturnsEmptyContent(t *testing.T)
 		},
 	}
 
-	instance, err := New(Config{
-		Provider:     provider,
-		SessionStore: store,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		provider,
+		store,
+		nil,
+	)
 
 	result, err := instance.RunTurn(context.Background(), TurnInput{
 		SessionKey:      "discord:4",
@@ -312,16 +316,16 @@ func TestRunTurnPersistsToolTranscriptWhenFollowUpLLMCallFails(t *testing.T) {
 		result:      tools.SilentResult("weather=25C"),
 	})
 
-	instance, err := New(Config{
-		Provider:     provider,
-		SessionStore: store,
-		Tools:        registry,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		provider,
+		store,
+		registry,
+	)
 
-	_, err = instance.RunTurn(context.Background(), TurnInput{
+	_, err := instance.RunTurn(context.Background(), TurnInput{
 		SessionKey:  "discord:5",
 		Channel:     "discord",
 		ChatID:      "chat-5",
@@ -354,15 +358,16 @@ func TestRunTurnSavesUserMessageWhenFirstLLMCallFails(t *testing.T) {
 		errAtCall:    1,
 	}
 
-	instance, err := New(Config{
-		Provider:     provider,
-		SessionStore: store,
-	})
-	if err != nil {
-		t.Fatalf("New returned error: %v", err)
-	}
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		provider,
+		store,
+		nil,
+	)
 
-	_, err = instance.RunTurn(context.Background(), TurnInput{
+	_, err := instance.RunTurn(context.Background(), TurnInput{
 		SessionKey:  "discord:6",
 		UserMessage: "hello",
 	})
