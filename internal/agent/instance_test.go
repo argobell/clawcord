@@ -387,3 +387,71 @@ func TestNewAgentInstanceUsesNamedWorkspaceSuffixForNonMainAgent(t *testing.T) {
 		t.Fatalf("Workspace = %q, want %q", instance.Workspace, expected)
 	}
 }
+
+func TestNewAgentInstanceUsesNamedWorkspaceSuffixWhenDefaultWorkspaceIsUnset(t *testing.T) {
+	wd := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd failed: %v", err)
+	}
+	if err := os.Chdir(wd); err != nil {
+		t.Fatalf("os.Chdir failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(oldwd)
+	})
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("os.Getwd failed: %v", err)
+	}
+
+	instance, err := NewAgentInstance(
+		config.AgentConfig{
+			ID:    "discord-helper",
+			Model: "main",
+		},
+		config.AgentDefaults{},
+		&config.Config{
+			ModelList: []config.ModelConfig{
+				{
+					ModelName: "main",
+					Model:     "openai/gpt-5.4",
+				},
+			},
+		},
+		&fakeProvider{defaultModel: "ignored-default"},
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewAgentInstance returned error: %v", err)
+	}
+
+	expected := filepath.Join(filepath.Dir(cwd), "workspace-discord-helper")
+	if instance.Workspace != expected {
+		t.Fatalf("Workspace = %q, want %q", instance.Workspace, expected)
+	}
+}
+
+func TestNewAgentInstanceFailsWhenModelAliasIsMissingFromModelList(t *testing.T) {
+	_, err := NewAgentInstance(
+		config.AgentConfig{},
+		config.AgentDefaults{
+			ModelName: "main",
+		},
+		&config.Config{
+			ModelList: []config.ModelConfig{
+				{
+					ModelName: "other",
+					Model:     "openai/gpt-5.4",
+				},
+			},
+		},
+		&fakeProvider{defaultModel: "ignored-default"},
+		nil,
+		nil,
+	)
+	if err == nil {
+		t.Fatal("expected missing model alias to return error")
+	}
+}

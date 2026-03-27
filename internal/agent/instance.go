@@ -44,9 +44,11 @@ func NewAgentInstance(
 	}
 
 	model := strings.TrimSpace(modelAlias)
-	if cfg != nil && model != "" {
+	if cfg != nil && model != "" && !strings.Contains(model, "/") {
 		if resolved, err := cfg.GetModelConfig(model); err == nil && resolved != nil {
 			model = strings.TrimSpace(resolved.Model)
+		} else if err != nil {
+			return nil, err
 		}
 	}
 
@@ -116,8 +118,15 @@ func resolveAgentWorkspace(agentCfg config.AgentConfig, defaults config.AgentDef
 	}
 
 	base := strings.TrimSpace(defaults.Workspace)
-	if base == "" || normalizeAgentID(agentCfg.ID) == "main" {
+	if normalizeAgentID(agentCfg.ID) == "main" {
 		return resolveWorkspace(base)
+	}
+	if base == "" {
+		var err error
+		base, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
 	}
 
 	baseWorkspace, err := expandHome(base)
