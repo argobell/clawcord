@@ -19,6 +19,6 @@ type PlaceholderCapable interface {
 
 // PlaceholderRecorder 由后续的 manager 注入，记录占位消息和 typing 状态。
 type PlaceholderRecorder interface {
-	RecordPlaceholder(channel, chatID, placeholderID string)
-	RecordTypingStop(channel, chatID string, stop func())
+	RecordPlaceholder(channel, chatID, messageID, placeholderID string)
+	RecordTypingStop(channel, chatID, messageID string, stop func())
 }

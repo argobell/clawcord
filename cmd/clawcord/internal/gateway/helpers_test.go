@@ -2,11 +2,13 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	internalagent "github.com/argobell/clawcord/internal/agent"
-	projectconfig "github.com/argobell/clawcord/pkg/config"
 	"github.com/argobell/clawcord/pkg/bus"
+	"github.com/argobell/clawcord/pkg/channels"
+	projectconfig "github.com/argobell/clawcord/pkg/config"
 	"github.com/argobell/clawcord/pkg/providers"
 	"github.com/argobell/clawcord/pkg/session"
 	"github.com/argobell/clawcord/pkg/tools"
@@ -85,4 +87,91 @@ func TestRunInboundLoopPublishesOutboundReply(t *testing.T) {
 
 	cancel()
 	<-done
+}
+
+type gatewaySessionStore struct {
+	closeCalls int
+}
+
+func (f *gatewaySessionStore) AddMessage(_, _, _ string)                    {}
+func (f *gatewaySessionStore) AddFullMessage(_ string, _ providers.Message) {}
+func (f *gatewaySessionStore) GetHistory(_ string) []providers.Message      { return nil }
+func (f *gatewaySessionStore) GetSummary(_ string) string                   { return "" }
+func (f *gatewaySessionStore) SetSummary(_, _ string)                       {}
+func (f *gatewaySessionStore) SetHistory(_ string, _ []providers.Message)   {}
+func (f *gatewaySessionStore) TruncateHistory(_ string, _ int)              {}
+func (f *gatewaySessionStore) Save(_ string) error                          { return nil }
+func (f *gatewaySessionStore) Close() error {
+	f.closeCalls++
+	return nil
+}
+
+type fakeGatewayChannel struct {
+	name                   string
+	stopErr                error
+	stopCalls              int
+	placeholderRecorderSet bool
+}
+
+func (f *fakeGatewayChannel) Name() string                { return f.name }
+func (f *fakeGatewayChannel) Start(context.Context) error { return nil }
+func (f *fakeGatewayChannel) Stop(context.Context) error {
+	f.stopCalls++
+	return f.stopErr
+}
+func (f *fakeGatewayChannel) Send(context.Context, bus.OutboundMessage) error { return nil }
+func (f *fakeGatewayChannel) IsRunning() bool                                 { return true }
+func (f *fakeGatewayChannel) IsAllowed(string) bool                           { return true }
+func (f *fakeGatewayChannel) IsAllowedSender(bus.SenderInfo) bool             { return true }
+func (f *fakeGatewayChannel) ReasoningChannelID() string                      { return "" }
+func (f *fakeGatewayChannel) SetPlaceholderRecorder(_ channels.PlaceholderRecorder) {
+	f.placeholderRecorderSet = true
+}
+
+func TestGatewayRuntimeCloseContinuesCleanupOnChannelStopError(t *testing.T) {
+	stopErr := errors.New("close failed")
+	messageBus := bus.NewMessageBus()
+	ch := &fakeGatewayChannel{name: "discord", stopErr: stopErr}
+
+	store := &gatewaySessionStore{}
+	inst, err := internalagent.NewAgentInstance(
+		projectconfig.AgentConfig{ID: "main"},
+		projectconfig.AgentDefaults{ModelName: "main"},
+		&projectconfig.Config{
+			ModelList: []projectconfig.ModelConfig{{ModelName: "main", Model: "gpt-5.4-mini"}},
+		},
+		&fakeGatewayProvider{content: "pong"},
+		store,
+		tools.NewToolRegistry(),
+	)
+	if err != nil {
+		t.Fatalf("NewAgentInstance() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rt := &gatewayRuntime{
+		bus:     messageBus,
+		agent:   inst,
+		channel: ch,
+		cancel:  cancel,
+	}
+	rt.wg.Add(1)
+	go func() {
+		defer rt.wg.Done()
+		<-ctx.Done()
+	}()
+
+	err = rt.Close(context.Background())
+	if !errors.Is(err, stopErr) {
+		t.Fatalf("Close() error = %v, want %v", err, stopErr)
+	}
+	if store.closeCalls != 1 {
+		t.Fatalf("session Close calls = %d, want 1", store.closeCalls)
+	}
+	if ch.stopCalls != 1 {
+		t.Fatalf("channel stop calls = %d, want 1", ch.stopCalls)
+	}
+	if publishErr := messageBus.PublishOutbound(context.Background(), bus.OutboundMessage{}); !errors.Is(publishErr, bus.ErrBusClosed) {
+		t.Fatalf("PublishOutbound() error = %v, want ErrBusClosed", publishErr)
+	}
 }

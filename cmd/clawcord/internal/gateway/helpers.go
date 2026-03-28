@@ -10,14 +10,22 @@ import (
 	cliruntime "github.com/argobell/clawcord/cmd/clawcord/internal/runtime"
 	internalagent "github.com/argobell/clawcord/internal/agent"
 	"github.com/argobell/clawcord/pkg/bus"
+	"github.com/argobell/clawcord/pkg/channels"
 	"github.com/argobell/clawcord/pkg/channels/discord"
 	"github.com/argobell/clawcord/pkg/logger"
 )
 
+type gatewayChannel interface {
+	outboundChannel
+	Start(context.Context) error
+	Stop(context.Context) error
+	SetPlaceholderRecorder(channels.PlaceholderRecorder)
+}
+
 type gatewayRuntime struct {
 	bus        *bus.MessageBus
 	agent      *internalagent.AgentInstance
-	channel    *discord.DiscordChannel
+	channel    gatewayChannel
 	controller *outboundController
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
@@ -104,12 +112,13 @@ func (r *gatewayRuntime) Close(ctx context.Context) error {
 		return nil
 	}
 
+	var firstErr error
 	if r.cancel != nil {
 		r.cancel()
 	}
 	if r.channel != nil {
 		if err := r.channel.Stop(ctx); err != nil {
-			return err
+			firstErr = err
 		}
 	}
 	if r.bus != nil {
@@ -117,9 +126,11 @@ func (r *gatewayRuntime) Close(ctx context.Context) error {
 	}
 	r.wg.Wait()
 	if r.agent != nil {
-		return r.agent.Close()
+		if err := r.agent.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	return firstErr
 }
 
 func runInboundLoop(ctx context.Context, b *bus.MessageBus, inst *internalagent.AgentInstance) {

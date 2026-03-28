@@ -8,11 +8,11 @@ import (
 
 func TestResolveModelName(t *testing.T) {
 	tests := []struct {
-		name      string
-		agentCfg   config.AgentConfig
-		defaults  config.AgentDefaults
-		override  string
-		want      string
+		name     string
+		agentCfg config.AgentConfig
+		defaults config.AgentDefaults
+		override string
+		want     string
 	}{
 		{
 			name:     "uses flag override first",

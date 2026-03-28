@@ -8,11 +8,11 @@ import (
 )
 
 type fakeOutboundChannel struct {
-	name         string
-	sendCalls    []bus.OutboundMessage
-	editCalls    []editCall
-	running      bool
-	reasoningID  string
+	name        string
+	sendCalls   []bus.OutboundMessage
+	editCalls   []editCall
+	running     bool
+	reasoningID string
 }
 
 type editCall struct {
@@ -21,17 +21,17 @@ type editCall struct {
 	content   string
 }
 
-func (f *fakeOutboundChannel) Name() string { return f.name }
+func (f *fakeOutboundChannel) Name() string                { return f.name }
 func (f *fakeOutboundChannel) Start(context.Context) error { f.running = true; return nil }
 func (f *fakeOutboundChannel) Stop(context.Context) error  { f.running = false; return nil }
 func (f *fakeOutboundChannel) Send(_ context.Context, msg bus.OutboundMessage) error {
 	f.sendCalls = append(f.sendCalls, msg)
 	return nil
 }
-func (f *fakeOutboundChannel) IsRunning() bool { return f.running }
-func (f *fakeOutboundChannel) IsAllowed(string) bool { return true }
+func (f *fakeOutboundChannel) IsRunning() bool                     { return f.running }
+func (f *fakeOutboundChannel) IsAllowed(string) bool               { return true }
 func (f *fakeOutboundChannel) IsAllowedSender(bus.SenderInfo) bool { return true }
-func (f *fakeOutboundChannel) ReasoningChannelID() string { return f.reasoningID }
+func (f *fakeOutboundChannel) ReasoningChannelID() string          { return f.reasoningID }
 func (f *fakeOutboundChannel) EditMessage(_ context.Context, chatID string, messageID string, content string) error {
 	f.editCalls = append(f.editCalls, editCall{chatID: chatID, messageID: messageID, content: content})
 	return nil
@@ -44,13 +44,14 @@ func TestOutboundControllerEditsPlaceholderAndStopsTyping(t *testing.T) {
 	})
 
 	stopCalls := 0
-	ctrl.RecordPlaceholder("discord", "chat-1", "placeholder-1")
-	ctrl.RecordTypingStop("discord", "chat-1", func() { stopCalls++ })
+	ctrl.RecordPlaceholder("discord", "chat-1", "msg-1", "placeholder-1")
+	ctrl.RecordTypingStop("discord", "chat-1", "msg-1", func() { stopCalls++ })
 
 	err := ctrl.HandleOutbound(context.Background(), bus.OutboundMessage{
-		Channel: "discord",
-		ChatID:  "chat-1",
-		Content: "hello",
+		Channel:          "discord",
+		ChatID:           "chat-1",
+		Content:          "hello",
+		ReplyToMessageID: "msg-1",
 	})
 	if err != nil {
 		t.Fatalf("HandleOutbound() error = %v", err)
@@ -87,5 +88,38 @@ func TestOutboundControllerFallsBackToSend(t *testing.T) {
 	}
 	if len(channel.editCalls) != 0 {
 		t.Fatalf("editCalls = %d, want 0", len(channel.editCalls))
+	}
+}
+
+func TestOutboundControllerMatchesPlaceholderPerMessage(t *testing.T) {
+	channel := &fakeOutboundChannel{name: "discord", running: true}
+	ctrl := newOutboundController(map[string]outboundChannel{
+		"discord": channel,
+	})
+
+	stopCalls := 0
+	ctrl.RecordPlaceholder("discord", "chat-1", "msg-1", "placeholder-1")
+	ctrl.RecordTypingStop("discord", "chat-1", "msg-1", func() { stopCalls++ })
+	ctrl.RecordPlaceholder("discord", "chat-1", "msg-2", "placeholder-2")
+	ctrl.RecordTypingStop("discord", "chat-1", "msg-2", func() { stopCalls++ })
+
+	err := ctrl.HandleOutbound(context.Background(), bus.OutboundMessage{
+		Channel:          "discord",
+		ChatID:           "chat-1",
+		Content:          "second",
+		ReplyToMessageID: "msg-2",
+	})
+	if err != nil {
+		t.Fatalf("HandleOutbound() error = %v", err)
+	}
+
+	if stopCalls != 1 {
+		t.Fatalf("stopCalls = %d, want 1", stopCalls)
+	}
+	if len(channel.editCalls) != 1 {
+		t.Fatalf("editCalls = %d, want 1", len(channel.editCalls))
+	}
+	if channel.editCalls[0].messageID != "placeholder-2" {
+		t.Fatalf("edited placeholder = %q, want placeholder-2", channel.editCalls[0].messageID)
 	}
 }

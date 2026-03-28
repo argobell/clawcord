@@ -28,16 +28,16 @@ func newOutboundController(channelsByName map[string]outboundChannel) *outboundC
 	}
 }
 
-func (c *outboundController) RecordPlaceholder(channel, chatID, placeholderID string) {
+func (c *outboundController) RecordPlaceholder(channel, chatID, messageID, placeholderID string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.placeholders[outboundKey(channel, chatID)] = placeholderID
+	c.placeholders[outboundKey(channel, chatID, messageID)] = placeholderID
 }
 
-func (c *outboundController) RecordTypingStop(channel, chatID string, stop func()) {
+func (c *outboundController) RecordTypingStop(channel, chatID, messageID string, stop func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.typingStops[outboundKey(channel, chatID)] = stop
+	c.typingStops[outboundKey(channel, chatID, messageID)] = stop
 }
 
 func (c *outboundController) HandleOutbound(ctx context.Context, msg bus.OutboundMessage) error {
@@ -46,7 +46,7 @@ func (c *outboundController) HandleOutbound(ctx context.Context, msg bus.Outboun
 		return fmt.Errorf("channel %q not found", msg.Channel)
 	}
 
-	key := outboundKey(msg.Channel, msg.ChatID)
+	key := outboundKey(msg.Channel, msg.ChatID, msg.ReplyToMessageID)
 
 	c.mu.Lock()
 	stop := c.typingStops[key]
@@ -72,6 +72,6 @@ func (c *outboundController) HandleOutbound(ctx context.Context, msg bus.Outboun
 	return ch.Send(ctx, msg)
 }
 
-func outboundKey(channel, chatID string) string {
-	return channel + ":" + chatID
+func outboundKey(channel, chatID, messageID string) string {
+	return channel + ":" + chatID + ":" + messageID
 }
