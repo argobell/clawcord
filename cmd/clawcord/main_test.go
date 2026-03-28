@@ -2,21 +2,26 @@ package main
 
 import "testing"
 
-func TestNewClawcordCommandIncludesOnboard(t *testing.T) {
+func TestNewClawcordCommandIncludesCommands(t *testing.T) {
 	cmd := NewClawcordCommand()
 
 	if cmd.Use != "clawcord" {
 		t.Fatalf("Use = %q, want %q", cmd.Use, "clawcord")
 	}
 
-	found := false
+	found := map[string]bool{
+		"onboard": false,
+		"agent":   false,
+		"gateway": false,
+	}
 	for _, sub := range cmd.Commands() {
-		if sub.Use == "onboard" {
-			found = true
-			break
+		if _, ok := found[sub.Use]; ok {
+			found[sub.Use] = true
 		}
 	}
-	if !found {
-		t.Fatal("onboard command not found")
+	for name, ok := range found {
+		if !ok {
+			t.Fatalf("%s command not found", name)
+		}
 	}
 }

@@ -271,29 +271,39 @@ func TestHandleMessageRecordsTypingAndPlaceholder(t *testing.T) {
 	if recorder.typingChannel != "discord" || recorder.typingChatID != "chat-1" || recorder.typingStop == nil {
 		t.Fatalf("typing recorder not populated: %+v", recorder)
 	}
+	if recorder.typingMessageID != "msg-1" {
+		t.Fatalf("typing message id = %q, want %q", recorder.typingMessageID, "msg-1")
+	}
 	if recorder.placeholderChannel != "discord" || recorder.placeholderChatID != "chat-1" || recorder.placeholderID != "placeholder-1" {
 		t.Fatalf("placeholder recorder not populated: %+v", recorder)
+	}
+	if recorder.placeholderMessageID != "msg-1" {
+		t.Fatalf("placeholder message id = %q, want %q", recorder.placeholderMessageID, "msg-1")
 	}
 }
 
 type recordingPlaceholderRecorder struct {
-	placeholderChannel string
-	placeholderChatID  string
-	placeholderID      string
-	typingChannel      string
-	typingChatID       string
-	typingStop         func()
+	placeholderChannel   string
+	placeholderChatID    string
+	placeholderMessageID string
+	placeholderID        string
+	typingChannel        string
+	typingChatID         string
+	typingMessageID      string
+	typingStop           func()
 }
 
-func (r *recordingPlaceholderRecorder) RecordPlaceholder(channel, chatID, placeholderID string) {
+func (r *recordingPlaceholderRecorder) RecordPlaceholder(channel, chatID, messageID, placeholderID string) {
 	r.placeholderChannel = channel
 	r.placeholderChatID = chatID
+	r.placeholderMessageID = messageID
 	r.placeholderID = placeholderID
 }
 
-func (r *recordingPlaceholderRecorder) RecordTypingStop(channel, chatID string, stop func()) {
+func (r *recordingPlaceholderRecorder) RecordTypingStop(channel, chatID, messageID string, stop func()) {
 	r.typingChannel = channel
 	r.typingChatID = chatID
+	r.typingMessageID = messageID
 	r.typingStop = stop
 }
 
