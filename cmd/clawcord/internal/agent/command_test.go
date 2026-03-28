@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	cliruntime "github.com/argobell/clawcord/cmd/clawcord/internal/runtime"
 	"github.com/argobell/clawcord/pkg/config"
 )
 
@@ -94,9 +95,9 @@ func TestResolveDefaultAgent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolveDefaultAgent(&tt.cfg)
+			got := cliruntime.ResolveDefaultAgent(&tt.cfg)
 			if got.ID != tt.want {
-				t.Errorf("resolveDefaultAgent() = %v, want %v", got.ID, tt.want)
+				t.Errorf("ResolveDefaultAgent() = %v, want %v", got.ID, tt.want)
 			}
 		})
 	}
@@ -104,9 +105,9 @@ func TestResolveDefaultAgent(t *testing.T) {
 
 func TestSessionStoragePath(t *testing.T) {
 	workspace := filepath.Join("/tmp", "clawcord-workspace")
-	got := sessionStoragePath(workspace)
+	got := cliruntime.SessionStoragePath(workspace)
 	want := filepath.Join(workspace, "sessions")
 	if got != want {
-		t.Fatalf("sessionStoragePath() = %q, want %q", got, want)
+		t.Fatalf("SessionStoragePath() = %q, want %q", got, want)
 	}
 }
