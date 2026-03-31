@@ -13,6 +13,7 @@ import (
 	"github.com/argobell/clawcord/pkg/bus"
 	"github.com/argobell/clawcord/pkg/config"
 	"github.com/argobell/clawcord/pkg/logger"
+	"github.com/argobell/clawcord/pkg/media"
 )
 
 var (
@@ -75,6 +76,7 @@ type BaseChannel struct {
 	placeholderRecorder PlaceholderRecorder
 	owner               Channel
 	reasoningChannelID  string
+	mediaStore          media.MediaStore
 }
 
 func NewBaseChannel(
@@ -265,6 +267,14 @@ func (c *BaseChannel) GetPlaceholderRecorder() PlaceholderRecorder {
 
 func (c *BaseChannel) SetOwner(ch Channel) {
 	c.owner = ch
+}
+
+func (c *BaseChannel) SetMediaStore(s media.MediaStore) {
+	c.mediaStore = s
+}
+
+func (c *BaseChannel) GetMediaStore() media.MediaStore {
+	return c.mediaStore
 }
 
 func BuildMediaScope(channel, chatID, messageID string) string {
