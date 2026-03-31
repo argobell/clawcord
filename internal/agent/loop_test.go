@@ -2,9 +2,14 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/argobell/clawcord/pkg/bus"
 	"github.com/argobell/clawcord/pkg/config"
+	"github.com/argobell/clawcord/pkg/media"
 	"github.com/argobell/clawcord/pkg/providers"
 	"github.com/argobell/clawcord/pkg/session"
 	"github.com/argobell/clawcord/pkg/tools"
@@ -91,7 +96,7 @@ func TestRunTurnReturnsDirectAnswerAndPersistsMessages(t *testing.T) {
 	)
 	instance.ContextBuilder = NewContextBuilder(instance.Workspace, "system prompt")
 
-	result, err := instance.RunTurn(context.Background(), TurnInput{
+	result, err := instance.RunTurn(context.Background(), ProcessOptions{
 		SessionKey:      "discord:1",
 		Channel:         "discord",
 		ChatID:          "chat-1",
@@ -169,7 +174,7 @@ func TestRunTurnPersistsToolTranscriptInOrder(t *testing.T) {
 		registry,
 	)
 
-	result, err := instance.RunTurn(context.Background(), TurnInput{
+	result, err := instance.RunTurn(context.Background(), ProcessOptions{
 		SessionKey:      "discord:2",
 		Channel:         "discord",
 		ChatID:          "chat-2",
@@ -233,7 +238,7 @@ func TestRunTurnNoHistorySkipsExistingHistoryInProviderMessages(t *testing.T) {
 		nil,
 	)
 
-	_, err := instance.RunTurn(context.Background(), TurnInput{
+	_, err := instance.RunTurn(context.Background(), ProcessOptions{
 		SessionKey:  "discord:3",
 		Channel:     "discord",
 		ChatID:      "chat-3",
@@ -273,7 +278,7 @@ func TestRunTurnUsesDefaultResponseWhenProviderReturnsEmptyContent(t *testing.T)
 		nil,
 	)
 
-	result, err := instance.RunTurn(context.Background(), TurnInput{
+	result, err := instance.RunTurn(context.Background(), ProcessOptions{
 		SessionKey:      "discord:4",
 		UserMessage:     "hello",
 		DefaultResponse: "fallback response",
@@ -325,7 +330,7 @@ func TestRunTurnPersistsToolTranscriptWhenFollowUpLLMCallFails(t *testing.T) {
 		registry,
 	)
 
-	_, err := instance.RunTurn(context.Background(), TurnInput{
+	_, err := instance.RunTurn(context.Background(), ProcessOptions{
 		SessionKey:  "discord:5",
 		Channel:     "discord",
 		ChatID:      "chat-5",
@@ -367,7 +372,7 @@ func TestRunTurnSavesUserMessageWhenFirstLLMCallFails(t *testing.T) {
 		nil,
 	)
 
-	_, err := instance.RunTurn(context.Background(), TurnInput{
+	_, err := instance.RunTurn(context.Background(), ProcessOptions{
 		SessionKey:  "discord:6",
 		UserMessage: "hello",
 	})
@@ -376,5 +381,129 @@ func TestRunTurnSavesUserMessageWhenFirstLLMCallFails(t *testing.T) {
 	}
 	if store.saveCalls != 1 {
 		t.Fatalf("expected Save to be called once, got %d", store.saveCalls)
+	}
+}
+
+func TestRunTurnResolvesMediaRefsBeforeProviderCall(t *testing.T) {
+	store := session.NewSessionManager("")
+	provider := &recordingProvider{
+		defaultModel: "gpt-5.4",
+		responses: []*providers.LLMResponse{
+			{Content: "looks like an orange face"},
+		},
+	}
+
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		provider,
+		store,
+		nil,
+	)
+
+	mediaStore := media.NewFileMediaStore()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "image.png")
+	if err := os.WriteFile(path, []byte("fake png bytes"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	ref, err := mediaStore.Store(path, media.MediaMeta{
+		Filename:    "image.png",
+		ContentType: "image/png",
+		Source:      "test",
+	}, "scope-1")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+	_, err = instance.RunTurn(context.Background(), ProcessOptions{
+		SessionKey:  "discord:media:1",
+		Channel:     "discord",
+		ChatID:      "chat-1",
+		UserMessage: ".claw",
+		Media:       []string{ref},
+		MediaStore:  mediaStore,
+	})
+	if err != nil {
+		t.Fatalf("RunTurn returned error: %v", err)
+	}
+
+	if provider.calls != 1 {
+		t.Fatalf("provider.calls = %d, want 1", provider.calls)
+	}
+	if len(provider.messages) != 1 || len(provider.messages[0]) < 2 {
+		t.Fatalf("provider messages = %#v, want system+user", provider.messages)
+	}
+	userMsg := provider.messages[0][1]
+	if len(userMsg.Media) != 1 {
+		t.Fatalf("user media count = %d, want 1", len(userMsg.Media))
+	}
+	if !strings.HasPrefix(userMsg.Media[0], "data:image/png;base64,") {
+		t.Fatalf("user media = %q, want data:image/png base64 URL", userMsg.Media[0])
+	}
+}
+
+func TestRunTurnPublishesHandledToolMedia(t *testing.T) {
+	store := session.NewSessionManager("")
+	provider := &recordingProvider{
+		defaultModel: "gpt-5.4",
+		responses: []*providers.LLMResponse{
+			{
+				Content: "sending file",
+				ToolCalls: []providers.ToolCall{
+					{
+						ID:   "call-1",
+						Type: "function",
+						Name: "send_file",
+						Arguments: map[string]any{
+							"path": "/tmp/example.png",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	registry := tools.NewToolRegistry()
+	registry.Register(&loopMockTool{
+		name:        "send_file",
+		description: "send a file",
+		result:      tools.MediaResult("attachment delivered", []string{"media://abc"}).WithResponseHandled(),
+	})
+
+	instance := newTestAgentInstance(
+		t,
+		config.AgentDefaults{ModelName: "gpt-5.4"},
+		config.AgentConfig{},
+		provider,
+		store,
+		registry,
+	)
+
+	var published []bus.OutboundMediaMessage
+	result, err := instance.RunTurn(context.Background(), ProcessOptions{
+		SessionKey:  "discord:media:handled",
+		Channel:     "discord",
+		ChatID:      "chat-1",
+		UserMessage: "send it",
+		PublishMedia: func(_ context.Context, msg bus.OutboundMediaMessage) error {
+			published = append(published, msg)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn returned error: %v", err)
+	}
+	if result.Content != "" {
+		t.Fatalf("expected no final text content after handled media send, got %q", result.Content)
+	}
+	if !result.ResponseHandled {
+		t.Fatal("expected response handled result")
+	}
+	if len(published) != 1 {
+		t.Fatalf("published media count = %d, want 1", len(published))
+	}
+	if len(published[0].Parts) != 1 || published[0].Parts[0].Ref != "media://abc" {
+		t.Fatalf("published parts = %#v, want media://abc", published[0].Parts)
 	}
 }

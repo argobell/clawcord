@@ -1,6 +1,11 @@
 package tools
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
+
+const handledToolLLMNote = "The requested output has already been delivered to the user in the current chat. Do not call send_file or any other delivery tool again. If you reply, provide only a brief confirmation."
 
 // ToolResult 表示工具执行的结构化返回值。
 // 它提供了不同类型结果的清晰语义，并支持异步操作、用户消息和错误处理。
@@ -33,6 +38,10 @@ type ToolResult struct {
 	// Media 包含此工具生成的媒体资源引用。
 	// 如果非空，代理将这些资源作为 OutboundMediaMessage 发布。
 	Media []string `json:"media,omitempty"`
+
+	// ResponseHandled 表示工具已经直接完成了对用户的交付。
+	// 例如 send_file 已经把附件发送到当前会话中。
+	ResponseHandled bool `json:"response_handled,omitempty"`
 }
 
 // NewToolResult 创建一个包含 LLM 内容的基本 ToolResult。
@@ -136,6 +145,27 @@ func MediaResult(forLLM string, mediaRefs []string) *ToolResult {
 	}
 }
 
+// ContentForLLM 返回发给 LLM 的规范化结果内容。
+func (tr *ToolResult) ContentForLLM() string {
+	if tr == nil {
+		return ""
+	}
+
+	content := tr.ForLLM
+	if content == "" && tr.Err != nil {
+		content = tr.Err.Error()
+	}
+	if tr.ResponseHandled {
+		if content == "" {
+			return handledToolLLMNote
+		}
+		if !strings.Contains(content, handledToolLLMNote) {
+			content += "\n" + handledToolLLMNote
+		}
+	}
+	return content
+}
+
 // MarshalJSON 实现自定义 JSON 序列化逻辑。
 // Err 字段通过 json:"-" 标签从 JSON 输出中排除。
 func (tr *ToolResult) MarshalJSON() ([]byte, error) {
@@ -155,5 +185,11 @@ func (tr *ToolResult) MarshalJSON() ([]byte, error) {
 //	result := ErrorResult("操作失败").WithError(err)
 func (tr *ToolResult) WithError(err error) *ToolResult {
 	tr.Err = err
+	return tr
+}
+
+// WithResponseHandled 标记该结果已经在当前会话完成交付。
+func (tr *ToolResult) WithResponseHandled() *ToolResult {
+	tr.ResponseHandled = true
 	return tr
 }

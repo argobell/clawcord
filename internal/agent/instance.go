@@ -28,7 +28,7 @@ type AgentInstance struct {
 	Tools          *tools.ToolRegistry
 }
 
-// NewAgentInstance creates an agent instance from project config inputs.
+// NewAgentInstance 根据项目配置和默认值组装一个可运行的 Agent 实例。
 func NewAgentInstance(
 	agentCfg config.AgentConfig,
 	defaults config.AgentDefaults,
@@ -45,6 +45,7 @@ func NewAgentInstance(
 
 	model := strings.TrimSpace(modelAlias)
 	if cfg != nil && model != "" && !strings.Contains(model, "/") {
+		// 如果这里只给了模型别名，就尝试映射到具体模型配置。
 		if resolved, err := cfg.GetModelConfig(model); err == nil && resolved != nil {
 			model = strings.TrimSpace(resolved.Model)
 		} else if err != nil {
@@ -62,6 +63,7 @@ func NewAgentInstance(
 		return nil, fmt.Errorf("model is required")
 	}
 
+	// sessions 和 registry 允许外部注入；为空时使用默认实现兜底。
 	if sessions == nil {
 		sessions = session.NewSessionManager("")
 	}
@@ -105,6 +107,7 @@ func NewAgentInstance(
 	}, nil
 }
 
+// resolveAgentModel 优先读取 Agent 自己的模型配置，未配置时回退到默认模型名。
 func resolveAgentModel(agentCfg config.AgentConfig, defaults config.AgentDefaults) string {
 	if model := strings.TrimSpace(agentCfg.Model); model != "" {
 		return model
@@ -112,6 +115,8 @@ func resolveAgentModel(agentCfg config.AgentConfig, defaults config.AgentDefault
 	return strings.TrimSpace(defaults.GetModelName())
 }
 
+// resolveAgentWorkspace 负责决定 Agent 的工作区路径。
+// main agent 使用默认工作区，其他 agent 则派生独立子目录，避免互相覆盖。
 func resolveAgentWorkspace(agentCfg config.AgentConfig, defaults config.AgentDefaults) (string, error) {
 	if strings.TrimSpace(agentCfg.Workspace) != "" {
 		return expandHome(strings.TrimSpace(agentCfg.Workspace))
@@ -136,6 +141,7 @@ func resolveAgentWorkspace(agentCfg config.AgentConfig, defaults config.AgentDef
 	return filepath.Join(filepath.Dir(baseWorkspace), "workspace-"+normalizeAgentID(agentCfg.ID)), nil
 }
 
+// normalizeAgentID 统一整理 Agent ID，空值时视为 main。
 func normalizeAgentID(id string) string {
 	id = strings.TrimSpace(strings.ToLower(id))
 	if id == "" {
@@ -144,6 +150,7 @@ func normalizeAgentID(id string) string {
 	return id
 }
 
+// resolveWorkspace 解析最终工作区路径；空值时退回当前工作目录。
 func resolveWorkspace(workspace string) (string, error) {
 	if strings.TrimSpace(workspace) == "" {
 		return os.Getwd()
@@ -151,6 +158,7 @@ func resolveWorkspace(workspace string) (string, error) {
 	return expandHome(strings.TrimSpace(workspace))
 }
 
+// expandHome 将 ~ 展开为用户主目录，并清理普通路径。
 func expandHome(path string) (string, error) {
 	if path == "" {
 		return path, nil

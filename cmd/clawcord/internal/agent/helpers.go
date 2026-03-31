@@ -50,7 +50,7 @@ func agentRun(flags agentFlags) error {
 
 func runOneShot(instance *agent.AgentInstance, sessionKey, message string) error {
 	ctx := context.Background()
-	input := agent.TurnInput{
+	input := agent.ProcessOptions{
 		SessionKey:  sessionKey,
 		Channel:     "cli",
 		ChatID:      "cli",
@@ -91,7 +91,7 @@ func runInteractive(instance *agent.AgentInstance, sessionKey string) error {
 		}
 
 		// Run turn
-		turnInput := agent.TurnInput{
+		turnInput := agent.ProcessOptions{
 			SessionKey:  sessionKey,
 			Channel:     "cli",
 			ChatID:      "cli",

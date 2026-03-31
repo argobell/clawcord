@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -225,5 +226,18 @@ func TestToolResultJSONStructure(t *testing.T) {
 	}
 	if parsed["silent"] != false {
 		t.Errorf("Expected silent false, got %v", parsed["silent"])
+	}
+}
+
+func TestToolResultWithResponseHandled(t *testing.T) {
+	result := MediaResult("attachment delivered", []string{"media://example"}).WithResponseHandled()
+
+	if !result.ResponseHandled {
+		t.Fatal("expected ResponseHandled to be true")
+	}
+
+	content := result.ContentForLLM()
+	if !strings.Contains(content, "already been delivered to the user") {
+		t.Fatalf("ContentForLLM() = %q, want handled note", content)
 	}
 }
