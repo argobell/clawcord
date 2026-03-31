@@ -2,10 +2,17 @@ package discord
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/argobell/clawcord/pkg/bus"
 	projectconfig "github.com/argobell/clawcord/pkg/config"
+	"github.com/argobell/clawcord/pkg/media"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -208,6 +215,72 @@ func TestHandleMessagePublishesMediaOnlyMessage(t *testing.T) {
 	}
 }
 
+func TestHandleMessageStoresImageAttachmentInMediaStore(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+
+	ch, err := New(projectconfig.DiscordConfig{Token: "test-token"}, messageBus)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	ch.botUserID = "bot-user"
+	store := media.NewFileMediaStore()
+	ch.SetMediaStore(store)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("fake png bytes"))
+	}))
+	defer server.Close()
+
+	session := mustNewSession(t)
+	session.State.User = &discordgo.User{ID: "bot-user"}
+
+	ch.handleMessage(session, &discordgo.MessageCreate{
+		Message: &discordgo.Message{
+			ID:        "msg-1",
+			ChannelID: "dm-1",
+			Content:   ".claw",
+			Author: &discordgo.User{
+				ID:       "123456",
+				Username: "alice",
+			},
+			Attachments: []*discordgo.MessageAttachment{
+				{
+					ID:          "att-1",
+					Filename:    "image.png",
+					ContentType: "image/png",
+					URL:         server.URL + "/image.png",
+				},
+			},
+		},
+	})
+
+	msg, ok := messageBus.ConsumeInbound(context.Background())
+	if !ok {
+		t.Fatal("expected inbound message")
+	}
+	if len(msg.Media) != 1 {
+		t.Fatalf("Media count = %d, want 1", len(msg.Media))
+	}
+	if !strings.HasPrefix(msg.Media[0], "media://") {
+		t.Fatalf("Media[0] = %q, want media:// ref", msg.Media[0])
+	}
+
+	resolvedPath, resolvedMeta, err := store.ResolveWithMeta(msg.Media[0])
+	if err != nil {
+		t.Fatalf("ResolveWithMeta() error = %v", err)
+	}
+	if _, err := os.Stat(resolvedPath); err != nil {
+		t.Fatalf("stored media file missing: %v", err)
+	}
+	if resolvedMeta.Filename != "image.png" {
+		t.Fatalf("resolved filename = %q, want %q", resolvedMeta.Filename, "image.png")
+	}
+	if resolvedMeta.ContentType != "image/png" {
+		t.Fatalf("resolved content type = %q, want %q", resolvedMeta.ContentType, "image/png")
+	}
+}
+
 func TestStartStopManagesHandlerLifecycle(t *testing.T) {
 	ch, err := New(projectconfig.DiscordConfig{Token: "test-token"}, bus.NewMessageBus())
 	if err != nil {
@@ -286,6 +359,77 @@ func TestStartTypingBindsStopToTypingSession(t *testing.T) {
 
 	if _, ok := ch.typingSessions["chat-1"]; ok {
 		t.Fatal("typing session should be removed after second stop")
+	}
+}
+
+func TestSendMediaResolvesRefsAndUploadsFiles(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch, err := New(projectconfig.DiscordConfig{Token: "test-token"}, messageBus)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hello.txt")
+	if err := os.WriteFile(path, []byte("hello media"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	store := media.NewFileMediaStore()
+	ref, err := store.Store(path, media.MediaMeta{
+		Filename:    "hello.txt",
+		ContentType: "text/plain",
+		Source:      "test",
+	}, "scope-1")
+	if err != nil {
+		t.Fatalf("Store() error = %v", err)
+	}
+
+	ch.SetMediaStore(store)
+	ch.SetRunning(true)
+
+	var gotContent string
+	var gotFiles []*discordgo.File
+	var uploadedContent string
+	ch.sendComplexFn = func(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error) {
+		gotContent = msg.Content
+		gotFiles = msg.Files
+		if len(msg.Files) > 0 {
+			data, err := io.ReadAll(msg.Files[0].Reader)
+			if err != nil {
+				return nil, err
+			}
+			uploadedContent = string(data)
+		}
+		return &discordgo.Message{ID: "sent-1"}, nil
+	}
+
+	err = ch.SendMedia(context.Background(), bus.OutboundMediaMessage{
+		Channel: "discord",
+		ChatID:  "chat-1",
+		Parts: []bus.MediaPart{
+			{
+				Ref:         ref,
+				Filename:    "hello.txt",
+				ContentType: "text/plain",
+				Caption:     "caption",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendMedia() error = %v", err)
+	}
+	if gotContent != "caption" {
+		t.Fatalf("caption = %q, want caption", gotContent)
+	}
+	if len(gotFiles) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(gotFiles))
+	}
+	if gotFiles[0].Name != "hello.txt" {
+		t.Fatalf("file name = %q, want hello.txt", gotFiles[0].Name)
+	}
+	if uploadedContent != "hello media" {
+		t.Fatalf("uploaded content = %q, want %q", uploadedContent, "hello media")
 	}
 }
 

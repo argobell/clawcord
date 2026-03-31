@@ -3,6 +3,10 @@ package discord
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +15,7 @@ import (
 	"github.com/argobell/clawcord/pkg/channels"
 	"github.com/argobell/clawcord/pkg/config"
 	"github.com/argobell/clawcord/pkg/logger"
+	"github.com/argobell/clawcord/pkg/media"
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -32,6 +37,7 @@ type DiscordChannel struct {
 	closeFn        func() error
 	addHandlerFn   func(handler any) func()
 	typingFn       func(chatID string) error
+	sendComplexFn  func(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error)
 }
 
 // New 创建最小可用的 DiscordChannel。
@@ -67,6 +73,9 @@ func New(cfg config.DiscordConfig, messageBus *bus.MessageBus) (*DiscordChannel,
 	ch.closeFn = func() error { return ch.session.Close() }
 	ch.addHandlerFn = func(handler any) func() { return ch.session.AddHandler(handler) }
 	ch.typingFn = func(chatID string) error { return ch.session.ChannelTyping(chatID) }
+	ch.sendComplexFn = func(channelID string, msg *discordgo.MessageSend) (*discordgo.Message, error) {
+		return ch.session.ChannelMessageSendComplex(channelID, msg)
+	}
 	ch.SetOwner(ch)
 	return ch, nil
 }
@@ -147,7 +156,7 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 	go func() {
 		var err error
 		if msg.ReplyToMessageID != "" {
-			_, err = c.session.ChannelMessageSendComplex(msg.ChatID, &discordgo.MessageSend{
+			_, err = c.sendComplexFn(msg.ChatID, &discordgo.MessageSend{
 				Content: msg.Content,
 				Reference: &discordgo.MessageReference{
 					MessageID: msg.ReplyToMessageID,
@@ -167,6 +176,91 @@ func (c *DiscordChannel) Send(ctx context.Context, msg bus.OutboundMessage) erro
 		}
 		return nil
 	case <-sendCtx.Done():
+		return sendCtx.Err()
+	}
+}
+
+// SendMedia sends media attachments resolved from the configured media store.
+func (c *DiscordChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	if !c.IsRunning() {
+		return fmt.Errorf("discord channel is not running")
+	}
+	if strings.TrimSpace(msg.ChatID) == "" {
+		return fmt.Errorf("channel ID is empty")
+	}
+
+	store := c.GetMediaStore()
+	if store == nil {
+		return fmt.Errorf("no media store configured")
+	}
+
+	files := make([]*discordgo.File, 0, len(msg.Parts))
+	var caption string
+	for _, part := range msg.Parts {
+		localPath, err := store.Resolve(part.Ref)
+		if err != nil {
+			logger.ErrorCF("discord", "Failed to resolve media ref", map[string]any{
+				"ref":   part.Ref,
+				"error": err.Error(),
+			})
+			continue
+		}
+
+		file, err := os.Open(localPath)
+		if err != nil {
+			logger.ErrorCF("discord", "Failed to open media file", map[string]any{
+				"path":  localPath,
+				"error": err.Error(),
+			})
+			continue
+		}
+
+		filename := part.Filename
+		if filename == "" {
+			filename = "file"
+		}
+		files = append(files, &discordgo.File{
+			Name:        filename,
+			ContentType: part.ContentType,
+			Reader:      file,
+		})
+		if caption == "" && part.Caption != "" {
+			caption = part.Caption
+		}
+	}
+	if len(files) == 0 {
+		return nil
+	}
+
+	sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.sendComplexFn(msg.ChatID, &discordgo.MessageSend{
+			Content: caption,
+			Files:   files,
+		})
+		done <- err
+	}()
+
+	closeFiles := func() {
+		for _, file := range files {
+			if closer, ok := file.Reader.(*os.File); ok {
+				_ = closer.Close()
+			}
+		}
+	}
+
+	select {
+	case err := <-done:
+		closeFiles()
+		if err != nil {
+			return fmt.Errorf("discord send media failed: %w", err)
+		}
+		return nil
+	case <-sendCtx.Done():
+		closeFiles()
 		return sendCtx.Err()
 	}
 }
@@ -247,7 +341,7 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 		content = c.stripBotMention(content)
 	}
 
-	media := collectAttachmentURLs(m.Attachments)
+	media := c.collectInboundMedia(channels.BuildMediaScope("discord", m.ChannelID, m.ID), m.Attachments)
 	if content == "" && len(media) == 0 {
 		return
 	}
@@ -376,19 +470,113 @@ func buildDisplayName(user *discordgo.User) string {
 	return user.Username
 }
 
-func collectAttachmentURLs(attachments []*discordgo.MessageAttachment) []string {
+func (c *DiscordChannel) collectInboundMedia(scope string, attachments []*discordgo.MessageAttachment) []string {
 	if len(attachments) == 0 {
 		return nil
 	}
 
-	media := make([]string, 0, len(attachments))
+	store := c.GetMediaStore()
+	mediaRefs := make([]string, 0, len(attachments))
 	for _, attachment := range attachments {
 		if attachment == nil || strings.TrimSpace(attachment.URL) == "" {
 			continue
 		}
-		media = append(media, attachment.URL)
+		if store == nil || !shouldStoreAttachment(attachment) {
+			mediaRefs = append(mediaRefs, attachment.URL)
+			continue
+		}
+
+		localPath, contentType, err := downloadAttachment(attachment.URL, attachment.Filename)
+		if err != nil {
+			logger.WarnCF("discord", "Failed to download inbound attachment", map[string]any{
+				"url":      attachment.URL,
+				"filename": attachment.Filename,
+				"error":    err.Error(),
+			})
+			mediaRefs = append(mediaRefs, attachment.URL)
+			continue
+		}
+
+		ref, err := store.Store(localPath, media.MediaMeta{
+			Filename:    attachment.Filename,
+			ContentType: firstNonEmpty(strings.TrimSpace(attachment.ContentType), contentType),
+			Source:      "discord",
+		}, scope)
+		if err != nil {
+			_ = os.Remove(localPath)
+			logger.WarnCF("discord", "Failed to store inbound attachment", map[string]any{
+				"url":      attachment.URL,
+				"filename": attachment.Filename,
+				"error":    err.Error(),
+			})
+			mediaRefs = append(mediaRefs, attachment.URL)
+			continue
+		}
+
+		mediaRefs = append(mediaRefs, ref)
 	}
-	return media
+	return mediaRefs
+}
+
+func shouldStoreAttachment(attachment *discordgo.MessageAttachment) bool {
+	if attachment == nil {
+		return false
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(attachment.ContentType))
+	if strings.HasPrefix(contentType, "image/") {
+		return true
+	}
+
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(attachment.Filename))) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp":
+		return true
+	default:
+		return false
+	}
+}
+
+func downloadAttachment(rawURL, filename string) (string, string, error) {
+	resp, err := http.Get(rawURL)
+	if err != nil {
+		return "", "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", "", fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	pattern := "clawcord-discord-*"
+	if ext := filepath.Ext(strings.TrimSpace(filename)); ext != "" {
+		pattern += ext
+	}
+
+	tmp, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", "", err
+	}
+
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return "", "", err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return "", "", err
+	}
+
+	return tmp.Name(), strings.TrimSpace(resp.Header.Get("Content-Type")), nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func normalizeGroupTrigger(cfg config.DiscordConfig) config.GroupTriggerConfig {
