@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
-	internalagent "github.com/argobell/clawcord/internal/agent"
+	"github.com/argobell/clawcord/internal/agent"
+	builtintools "github.com/argobell/clawcord/internal/tools"
 	"github.com/argobell/clawcord/pkg/config"
+	"github.com/argobell/clawcord/pkg/media"
 	"github.com/argobell/clawcord/pkg/providers"
 	"github.com/argobell/clawcord/pkg/providers/openai"
 	"github.com/argobell/clawcord/pkg/session"
@@ -85,12 +87,30 @@ func CreateProviderFromModelConfig(modelCfg *config.ModelConfig) (providers.LLMP
 	return &httpProvider{delegate: inner}, model, nil
 }
 
+// NewDefaultToolRegistry creates the default runtime tool registry.
+func NewDefaultToolRegistry(workspace string, store media.MediaStore) *tools.ToolRegistry {
+	registry := tools.NewToolRegistry()
+	RegisterDefaultTools(registry, workspace, store)
+	return registry
+}
+
+// RegisterDefaultTools installs the currently supported default tools into an existing registry.
+func RegisterDefaultTools(registry *tools.ToolRegistry, workspace string, store media.MediaStore) {
+	if registry == nil {
+		return
+	}
+	// send_file only makes sense when the runtime has a media store and an outbound delivery path.
+	if store != nil {
+		registry.Register(builtintools.NewSendFileTool(workspace, 0, store))
+	}
+}
+
 // NewConfiguredAgentInstance builds the default runtime assembly for CLI commands.
 func NewConfiguredAgentInstance(
 	cfg *config.Config,
 	agentCfg config.AgentConfig,
 	modelOverride string,
-) (*internalagent.AgentInstance, error) {
+) (*agent.AgentInstance, error) {
 	modelName := ResolveModelName(agentCfg, cfg.Agents.Defaults, modelOverride)
 	modelCfg, err := cfg.GetModelConfig(modelName)
 	if err != nil {
@@ -102,7 +122,8 @@ func NewConfiguredAgentInstance(
 		return nil, fmt.Errorf("failed to create provider: %w", err)
 	}
 
-	tmpInstance, err := internalagent.NewAgentInstance(agentCfg, cfg.Agents.Defaults, cfg, provider, nil, nil)
+	// Build once to reuse the resolved workspace for session storage.
+	tmpInstance, err := agent.NewAgentInstance(agentCfg, cfg.Agents.Defaults, cfg, provider, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create agent instance: %w", err)
 	}
@@ -110,8 +131,8 @@ func NewConfiguredAgentInstance(
 	_ = tmpInstance.Close()
 
 	sessions := session.NewSessionManager(SessionStoragePath(workspace))
-	registry := tools.NewToolRegistry()
-	instance, err := internalagent.NewAgentInstance(agentCfg, cfg.Agents.Defaults, cfg, provider, sessions, registry)
+	registry := NewDefaultToolRegistry(workspace, nil)
+	instance, err := agent.NewAgentInstance(agentCfg, cfg.Agents.Defaults, cfg, provider, sessions, registry)
 	if err != nil {
 		_ = sessions.Close()
 		return nil, fmt.Errorf("failed to create agent instance: %w", err)
