@@ -10,6 +10,7 @@ import (
 type fakeOutboundChannel struct {
 	name        string
 	sendCalls   []bus.OutboundMessage
+	mediaCalls  []bus.OutboundMediaMessage
 	editCalls   []editCall
 	running     bool
 	reasoningID string
@@ -26,6 +27,10 @@ func (f *fakeOutboundChannel) Start(context.Context) error { f.running = true; r
 func (f *fakeOutboundChannel) Stop(context.Context) error  { f.running = false; return nil }
 func (f *fakeOutboundChannel) Send(_ context.Context, msg bus.OutboundMessage) error {
 	f.sendCalls = append(f.sendCalls, msg)
+	return nil
+}
+func (f *fakeOutboundChannel) SendMedia(_ context.Context, msg bus.OutboundMediaMessage) error {
+	f.mediaCalls = append(f.mediaCalls, msg)
 	return nil
 }
 func (f *fakeOutboundChannel) IsRunning() bool                     { return f.running }
@@ -121,5 +126,37 @@ func TestOutboundControllerMatchesPlaceholderPerMessage(t *testing.T) {
 	}
 	if channel.editCalls[0].messageID != "placeholder-2" {
 		t.Fatalf("edited placeholder = %q, want placeholder-2", channel.editCalls[0].messageID)
+	}
+}
+
+func TestOutboundControllerSendsMedia(t *testing.T) {
+	channel := &fakeOutboundChannel{name: "discord", running: true}
+	ctrl := newOutboundController(map[string]outboundChannel{
+		"discord": channel,
+	})
+
+	stopCalls := 0
+	ctrl.RecordPlaceholder("discord", "chat-1", "msg-1", "placeholder-1")
+	ctrl.RecordTypingStop("discord", "chat-1", "msg-1", func() { stopCalls++ })
+
+	err := ctrl.HandleOutboundMedia(context.Background(), bus.OutboundMediaMessage{
+		Channel:          "discord",
+		ChatID:           "chat-1",
+		ReplyToMessageID: "msg-1",
+		Parts: []bus.MediaPart{
+			{Ref: "media://abc"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleOutboundMedia() error = %v", err)
+	}
+	if len(channel.mediaCalls) != 1 {
+		t.Fatalf("mediaCalls = %d, want 1", len(channel.mediaCalls))
+	}
+	if stopCalls != 1 {
+		t.Fatalf("stopCalls = %d, want 1", stopCalls)
+	}
+	if channel.mediaCalls[0].Parts[0].Ref != "media://abc" {
+		t.Fatalf("media ref = %q, want media://abc", channel.mediaCalls[0].Parts[0].Ref)
 	}
 }

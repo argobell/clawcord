@@ -72,6 +72,30 @@ func (c *outboundController) HandleOutbound(ctx context.Context, msg bus.Outboun
 	return ch.Send(ctx, msg)
 }
 
+func (c *outboundController) HandleOutboundMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {
+	ch, ok := c.channels[msg.Channel]
+	if !ok {
+		return fmt.Errorf("channel %q not found", msg.Channel)
+	}
+
+	key := outboundKey(msg.Channel, msg.ChatID, msg.ReplyToMessageID)
+
+	c.mu.Lock()
+	stop := c.typingStops[key]
+	delete(c.typingStops, key)
+	delete(c.placeholders, key)
+	c.mu.Unlock()
+
+	if stop != nil {
+		stop()
+	}
+
+	if sender, ok := ch.(channels.MediaSender); ok {
+		return sender.SendMedia(ctx, msg)
+	}
+	return fmt.Errorf("channel %q cannot send media", msg.Channel)
+}
+
 func outboundKey(channel, chatID, messageID string) string {
 	return channel + ":" + chatID + ":" + messageID
 }

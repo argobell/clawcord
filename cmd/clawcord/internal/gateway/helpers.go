@@ -6,13 +6,14 @@ import (
 	"os"
 	"sync"
 
-	cmdinternal "github.com/argobell/clawcord/cmd/clawcord/internal"
-	cliruntime "github.com/argobell/clawcord/cmd/clawcord/internal/runtime"
-	internalagent "github.com/argobell/clawcord/internal/agent"
+	"github.com/argobell/clawcord/cmd/clawcord/internal"
+	"github.com/argobell/clawcord/cmd/clawcord/internal/runtime"
+	"github.com/argobell/clawcord/internal/agent"
 	"github.com/argobell/clawcord/pkg/bus"
 	"github.com/argobell/clawcord/pkg/channels"
 	"github.com/argobell/clawcord/pkg/channels/discord"
 	"github.com/argobell/clawcord/pkg/logger"
+	"github.com/argobell/clawcord/pkg/media"
 )
 
 type gatewayChannel interface {
@@ -24,9 +25,10 @@ type gatewayChannel interface {
 
 type gatewayRuntime struct {
 	bus        *bus.MessageBus
-	agent      *internalagent.AgentInstance
+	agent      *agent.AgentInstance
 	channel    gatewayChannel
 	controller *outboundController
+	mediaStore *media.FileMediaStore
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 }
@@ -48,7 +50,7 @@ func gatewayRun(ctx context.Context, flags gatewayFlags) error {
 }
 
 func newGatewayRuntime(parent context.Context) (*gatewayRuntime, error) {
-	cfg, err := cmdinternal.LoadConfig()
+	cfg, err := internal.LoadConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -59,19 +61,23 @@ func newGatewayRuntime(parent context.Context) (*gatewayRuntime, error) {
 		return nil, fmt.Errorf("discord token is required")
 	}
 
-	agentCfg := cliruntime.ResolveDefaultAgent(cfg)
-	instance, err := cliruntime.NewConfiguredAgentInstance(cfg, agentCfg, "")
+	agentCfg := runtime.ResolveDefaultAgent(cfg)
+	instance, err := runtime.NewConfiguredAgentInstance(cfg, agentCfg, "")
 	if err != nil {
 		return nil, err
 	}
 
 	messageBus := bus.NewMessageBus()
+	mediaStore := media.NewFileMediaStore()
 	channel, err := discord.New(cfg.Channels.Discord, messageBus)
 	if err != nil {
 		_ = instance.Close()
 		messageBus.Close()
 		return nil, err
 	}
+	channel.SetMediaStore(mediaStore)
+	// Gateway is the first runtime that can actually deliver media, so wire media-capable tools here.
+	runtime.RegisterDefaultTools(instance.Tools, instance.Workspace, mediaStore)
 
 	ctrl := newOutboundController(map[string]outboundChannel{
 		channel.Name(): channel,
@@ -84,6 +90,7 @@ func newGatewayRuntime(parent context.Context) (*gatewayRuntime, error) {
 		agent:      instance,
 		channel:    channel,
 		controller: ctrl,
+		mediaStore: mediaStore,
 		cancel:     cancel,
 	}
 
@@ -94,14 +101,18 @@ func newGatewayRuntime(parent context.Context) (*gatewayRuntime, error) {
 		return nil, err
 	}
 
-	rt.wg.Add(2)
+	rt.wg.Add(3)
 	go func() {
 		defer rt.wg.Done()
-		runInboundLoop(ctx, rt.bus, rt.agent)
+		runInboundLoop(ctx, rt.bus, rt.agent, rt.mediaStore)
 	}()
 	go func() {
 		defer rt.wg.Done()
 		runOutboundLoop(ctx, rt.bus, rt.controller)
+	}()
+	go func() {
+		defer rt.wg.Done()
+		runOutboundMediaLoop(ctx, rt.bus, rt.controller)
 	}()
 
 	return rt, nil
@@ -133,19 +144,25 @@ func (r *gatewayRuntime) Close(ctx context.Context) error {
 	return firstErr
 }
 
-func runInboundLoop(ctx context.Context, b *bus.MessageBus, inst *internalagent.AgentInstance) {
+func runInboundLoop(ctx context.Context, b *bus.MessageBus, inst *agent.AgentInstance, store *media.FileMediaStore) {
 	for {
 		msg, ok := b.ConsumeInbound(ctx)
 		if !ok {
 			return
 		}
 
-		result, err := inst.RunTurn(ctx, internalagent.TurnInput{
-			SessionKey:  msg.SessionKey,
-			Channel:     msg.Channel,
-			ChatID:      msg.ChatID,
-			UserMessage: msg.Content,
-			Media:       msg.Media,
+		result, err := inst.RunTurn(ctx, agent.ProcessOptions{
+			SessionKey:       msg.SessionKey,
+			Channel:          msg.Channel,
+			ChatID:           msg.ChatID,
+			ReplyToMessageID: msg.MessageID,
+			UserMessage:      msg.Content,
+			Media:            msg.Media,
+			MediaStore:       store,
+			// Keep handled media delivery on the same bus path as text replies.
+			PublishMedia: func(ctx context.Context, msg bus.OutboundMediaMessage) error {
+				return b.PublishOutboundMedia(ctx, msg)
+			},
 		})
 		if err != nil {
 			logger.ErrorCF("gateway", "Agent turn failed", map[string]any{
@@ -188,6 +205,22 @@ func runOutboundLoop(ctx context.Context, b *bus.MessageBus, ctrl *outboundContr
 		}
 		if err := ctrl.HandleOutbound(ctx, msg); err != nil {
 			logger.ErrorCF("gateway", "Failed to deliver outbound message", map[string]any{
+				"channel": msg.Channel,
+				"chat_id": msg.ChatID,
+				"error":   err.Error(),
+			})
+		}
+	}
+}
+
+func runOutboundMediaLoop(ctx context.Context, b *bus.MessageBus, ctrl *outboundController) {
+	for {
+		msg, ok := b.SubscribeOutboundMedia(ctx)
+		if !ok {
+			return
+		}
+		if err := ctrl.HandleOutboundMedia(ctx, msg); err != nil {
+			logger.ErrorCF("gateway", "Failed to deliver outbound media", map[string]any{
 				"channel": msg.Channel,
 				"chat_id": msg.ChatID,
 				"error":   err.Error(),

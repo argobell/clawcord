@@ -5,10 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	internalagent "github.com/argobell/clawcord/internal/agent"
+	"github.com/argobell/clawcord/internal/agent"
 	"github.com/argobell/clawcord/pkg/bus"
 	"github.com/argobell/clawcord/pkg/channels"
-	projectconfig "github.com/argobell/clawcord/pkg/config"
+	"github.com/argobell/clawcord/pkg/config"
 	"github.com/argobell/clawcord/pkg/providers"
 	"github.com/argobell/clawcord/pkg/session"
 	"github.com/argobell/clawcord/pkg/tools"
@@ -34,11 +34,11 @@ func TestRunInboundLoopPublishesOutboundReply(t *testing.T) {
 	messageBus := bus.NewMessageBus()
 	defer messageBus.Close()
 
-	instance, err := internalagent.NewAgentInstance(
-		projectconfig.AgentConfig{ID: "main"},
-		projectconfig.AgentDefaults{ModelName: "main"},
-		&projectconfig.Config{
-			ModelList: []projectconfig.ModelConfig{{ModelName: "main", Model: "gpt-5.4-mini"}},
+	instance, err := agent.NewAgentInstance(
+		config.AgentConfig{ID: "main"},
+		config.AgentDefaults{ModelName: "main"},
+		&config.Config{
+			ModelList: []config.ModelConfig{{ModelName: "main", Model: "gpt-5.4-mini"}},
 		},
 		&fakeGatewayProvider{content: "pong"},
 		session.NewSessionManager(t.TempDir()),
@@ -53,7 +53,7 @@ func TestRunInboundLoopPublishesOutboundReply(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		runInboundLoop(ctx, messageBus, instance)
+		runInboundLoop(ctx, messageBus, instance, nil)
 		close(done)
 	}()
 
@@ -134,11 +134,11 @@ func TestGatewayRuntimeCloseContinuesCleanupOnChannelStopError(t *testing.T) {
 	ch := &fakeGatewayChannel{name: "discord", stopErr: stopErr}
 
 	store := &gatewaySessionStore{}
-	inst, err := internalagent.NewAgentInstance(
-		projectconfig.AgentConfig{ID: "main"},
-		projectconfig.AgentDefaults{ModelName: "main"},
-		&projectconfig.Config{
-			ModelList: []projectconfig.ModelConfig{{ModelName: "main", Model: "gpt-5.4-mini"}},
+	inst, err := agent.NewAgentInstance(
+		config.AgentConfig{ID: "main"},
+		config.AgentDefaults{ModelName: "main"},
+		&config.Config{
+			ModelList: []config.ModelConfig{{ModelName: "main", Model: "gpt-5.4-mini"}},
 		},
 		&fakeGatewayProvider{content: "pong"},
 		store,
