@@ -2,8 +2,8 @@ package common
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -72,6 +72,53 @@ func TestSerializeMessagesWithMediaAndToolCallID(t *testing.T) {
 	}
 }
 
+func TestSerializeMessagesWithAudioDataURL(t *testing.T) {
+	messages := []Message{
+		{
+			Role:  "user",
+			Media: []string{"data:audio/mp3;base64,ZmFrZQ=="},
+		},
+	}
+
+	result := SerializeMessages(messages)
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	var msgs []map[string]any
+	if err := json.Unmarshal(data, &msgs); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+
+	content, ok := msgs[0]["content"].([]any)
+	if !ok {
+		t.Fatalf("content = %T, want []any", msgs[0]["content"])
+	}
+	if len(content) != 1 {
+		t.Fatalf("len(content) = %d, want 1", len(content))
+	}
+
+	part, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("content[0] = %T, want map[string]any", content[0])
+	}
+	if part["type"] != "input_audio" {
+		t.Fatalf("type = %v, want input_audio", part["type"])
+	}
+
+	inputAudio, ok := part["input_audio"].(map[string]any)
+	if !ok {
+		t.Fatalf("input_audio = %T, want map[string]any", part["input_audio"])
+	}
+	if inputAudio["format"] != "mp3" {
+		t.Fatalf("format = %v, want mp3", inputAudio["format"])
+	}
+	if inputAudio["data"] != "ZmFrZQ==" {
+		t.Fatalf("data = %v, want ZmFrZQ==", inputAudio["data"])
+	}
+}
+
 func TestParseResponseDecodesToolCallArguments(t *testing.T) {
 	body := `{"choices":[{"message":{"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"SF\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12}}`
 
@@ -112,25 +159,81 @@ func TestParseResponseDecodesObjectToolCallArguments(t *testing.T) {
 	}
 }
 
-func TestReadAndParseResponseRejectsHTML(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(http.StatusBadGateway)
-		w.Write([]byte("<html><body>proxy error</body></html>"))
-	}))
-	defer server.Close()
+func TestParseResponseNormalizesLengthFinishReason(t *testing.T) {
+	body := `{"choices":[{"message":{"content":"partial"},"finish_reason":"length"}]}`
 
-	resp, err := http.Get(server.URL)
+	out, err := ParseResponse(strings.NewReader(body))
 	if err != nil {
-		t.Fatalf("http.Get() error = %v", err)
+		t.Fatalf("ParseResponse() error = %v", err)
 	}
-	defer resp.Body.Close()
+	if out.FinishReason != "truncated" {
+		t.Fatalf("FinishReason = %q, want truncated", out.FinishReason)
+	}
+}
 
-	_, err = ReadAndParseResponse(resp, server.URL)
+func TestDecodeToolCallArgumentsPreservesRawOnInvalidJSONString(t *testing.T) {
+	raw := json.RawMessage(`"{not-json}"`)
+
+	args := DecodeToolCallArguments(raw, "broken_tool")
+
+	if args["raw"] != "{not-json}" {
+		t.Fatalf("raw = %v, want {not-json}", args["raw"])
+	}
+}
+
+func TestReadAndParseResponseRejectsHTML(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Header: http.Header{
+			"Content-Type": []string{"text/html"},
+		},
+		Body: io.NopCloser(strings.NewReader("<html><body>proxy error</body></html>")),
+	}
+
+	_, err := ReadAndParseResponse(resp, "https://example.test")
 	if err == nil {
 		t.Fatal("expected error for HTML response")
 	}
 	if !strings.Contains(err.Error(), "returned HTML instead of JSON") {
 		t.Fatalf("error = %q, want HTML hint", err.Error())
+	}
+}
+
+func TestReadAndParseResponseParsesJSONBody(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"hello"},"finish_reason":"stop"}]}`)),
+	}
+
+	out, err := ReadAndParseResponse(resp, "https://example.test")
+	if err != nil {
+		t.Fatalf("ReadAndParseResponse() error = %v", err)
+	}
+	if out.Content != "hello" {
+		t.Fatalf("Content = %q, want hello", out.Content)
+	}
+}
+
+func TestHandleErrorResponseIncludesPreviewForJSONBody(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadGateway,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"error":"upstream failed"}`)),
+	}
+
+	err := HandleErrorResponse(resp, "https://example.test")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "Status: 502") {
+		t.Fatalf("error = %q, want status preview", err.Error())
+	}
+	if !strings.Contains(err.Error(), `{"error":"upstream failed"}`) {
+		t.Fatalf("error = %q, want body preview", err.Error())
 	}
 }
