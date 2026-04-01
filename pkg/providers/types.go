@@ -1,6 +1,3 @@
-// providers 包定义了与 LLM（大语言模型）提供商交互的抽象接口和通用类型。
-// 该包作为 providers 模块的入口，重导出 protocoltypes 中的核心数据类型，
-// 并定义了统一的 LLMProvider 接口以及故障转移相关功能。
 package providers
 
 import (
